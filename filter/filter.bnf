@@ -1,0 +1,18 @@
+/* (i1 eq 'jeff' and (i2 ne 5 or i3 ne true)) */
+<Conjunction>      ::= <ParenPropCompare> | <ParenPropCompare> ("and" | "or") <ParenPropCompare>
+<ParenPropCompare> ::= "(" <PropCompare> ")" | <PropCompare>
+<PropCompare>      ::= <JsonPtr> <CompareOp> (<String> | <Decimal> | <Boolean>)
+<CompareOp>        ::= "eq" | "ne" | "ge" | "gt" | "le" | "lt"
+<String>           ::= "'" <StringChars>* "'"
+<StringChars>      ::= ([A-Z] | [a-z] | [0-9] | "~" | "!" | "@" | "#" | "$" | "%" | "^" | "&" | "*" | "(" | ")" | "-" | "_" | "=" | "+" | "[" | "]" | "{" | "}" | "\" | ";" | ":" | "," | "." | "/" | "<" | ">" | "?")*
+<Boolean>          ::= "true" | "false"
+<Integer>          ::= [+-] <Digit>* <Integer> | <Digit>
+<Float>          ::= <Integer> "." <Integer> | <Integer>
+<Digit>            ::= [0-9]
+<JsonPtr>          ::= ("/" <RefToken>)*
+<RefToken>         ::= ( <Unescaped> | <Escaped> )*
+<Unescaped>        ::= "0"
+/*[%x00-2E] | [%x30-7D] | [%x7F-10FFFF]*/
+/* %x2F ('/') and %x7E ('~') are excluded from 'unescaped' */
+<Escaped>          ::= "~" ( "0" | "1" )         
+/*  representing '~' and '/', respectively */
