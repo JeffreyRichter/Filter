@@ -29,12 +29,25 @@ func main() {
 		},
 	}
 
-	test := "foo ne null or child.childInt eq 42 and time gt time'1989-01-01T00:00:00Z' and (bool eq true and string eq 'Jeffr') and int gt 23 and float le 5"
+	// and has higher prcedence than or: a or b and c ==>  a or (b and c)
+	test := "foo eq null or " + // true
+		"child.childInt eq 42 and " + // true
+		"time gt time'1989-01-01T00:00:00Z' and " + // true
+		"(bool eq true and string eq 'Jeffr') and " + // (true and false): false
+		"int gt 23 and " + // false
+		"float le 5 or " + // true
+		"contains(string, 'eef')" // false
+	b := true || true && true && (true && false) && false && true || false
+
+	//test = "contains(string, 'ff')"
 	f, err := filter.New(test)
 	if err != nil {
 		fmt.Printf("Filter error: %v\n", err)
 	} else {
 		r, err := f.Evaluate(json)
 		fmt.Printf("Evaluation: %v, Err: %v\n", r, err)
+		if r != b {
+			panic("test failed")
+		}
 	}
 }

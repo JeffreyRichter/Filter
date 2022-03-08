@@ -9,6 +9,7 @@ import (
 )
 
 //var showNode = func(node Node) { fmt.Printf("%#v\n", node) }
+
 var showNode = func(node Node) {}
 
 // NodeKind represents a lexical token.
@@ -22,93 +23,152 @@ const (
 	NodeAnd        = NodeKind("And")
 	NodeOr         = NodeKind("Or")
 	NodeComparison = NodeKind("Compare")
+	NodeContains   = NodeKind("Contains")
 )
 
 // Node represents a node of the filter expression.
 type Node struct {
 	NodeKind
 	Comparison // If Kind == PropCompare, this field is set
+	Contains   // If Kind == Contains, this field is set
 	Error      error
 }
 
-// CompareOp represents a comparison operator and provides some type safety.
-type CompareOp string
+type typeMismatchError struct {
+	msg string
+}
 
-type Comparison struct {
-	PropName string // Must be an lexer.Ident
-	Op       CompareOp
-	Literal  lexer.Token
+func (e *typeMismatchError) SetMsg(c Comparison, jsonVal any, t lexer.Token) error {
+	return typeMismatchError{msg: fmt.Sprintf("Type mismatch: PropName(%s)='%v' while literal(%s)='%s'", c.PropName, jsonVal, c.Literal.TokenKind, c.Literal.Symbol)}
+}
+
+func (e typeMismatchError) Error() string { return e.msg }
+
+// Parser scans tokens finding its nodes
+type parser struct {
+	tokens []lexer.Token // Tokens being parsed
+	pos    int           // current token
+	start  int           // start token for a node
+	nodes  []Node        // Nodes created from the tokens
+}
+
+// next reads the next token or eof
+func (p *parser) next() (token lexer.Token) {
+	if p.pos >= len(p.tokens) { // No more tokens
+		panic("We should never get here because the parser should know to stop after reading TokenEOF or TokenError") //return eof
+	}
+	p.pos += 1
+	return p.tokens[p.pos-1]
+}
+
+// backup places the previously read token back
+func (p *parser) backup() { p.pos-- }
+
+func (p *parser) acceptOne(tokenKind lexer.TokenKind) bool {
+	if tokenKind == p.next().TokenKind {
+		return true
+	}
+	p.backup()
+	return false
+}
+
+func (p *parser) emit(kind NodeKind, c ...any) {
+	n := Node{NodeKind: kind}
+	switch kind { // If any type assertion panics, it's an error in this file.
+	case NodeComparison:
+		n.Comparison = c[0].(Comparison)
+	case NodeContains:
+		n.Contains = c[0].(Contains)
+	}
+	showNode(n)
+	p.nodes = append(p.nodes, n)
+}
+
+func (p *parser) emitError(format string, args ...any) []Node {
+	n := Node{NodeKind: NodeError, Error: errors.New(fmt.Sprintf(format, args...))}
+	showNode(n)
+	return append(p.nodes, n)
 }
 
 // GetNodes returns the nodes of filter
 func GetNodes(filter string) []Node {
-	nodes, parens := []Node{}, 0
-
-	emit := func(kind NodeKind, c ...Comparison) {
-		if len(c) == 0 { // If not specified, create a blank PropertyComparison
-			c = []Comparison{{}}
-		}
-		n := Node{NodeKind: kind, Comparison: c[0]}
-		showNode(n)
-		nodes = append(nodes, n)
-	}
-
-	emitError := func(format string, args ...any) []Node {
-		n := Node{NodeKind: NodeError, Error: errors.New(fmt.Sprintf(format, args...))}
-		showNode(n)
-		return append(nodes, n)
-	}
-
-	tokens := lexer.GetTokens(filter)
-	for i := 0; i < len(tokens); i++ {
-		switch tokens[i].TokenKind {
+	parens := 0
+	p := &parser{tokens: lexer.GetTokens(filter)}
+	for {
+		switch t := p.next(); t.TokenKind { // Consume next token
 		case lexer.TokenError:
-			return emitError(tokens[i].Symbol)
+			return p.emitError(t.Symbol)
 
 		case lexer.TokenEOF:
 			if parens > 0 {
-				return emitError("Unbalanced parentheses")
+				return p.emitError("Unbalanced parentheses")
 			}
-			emit(NodeEOF)
-			return nodes
+			p.emit(NodeEOF)
+			return p.nodes
 
 		case lexer.TokenLeftParen:
 			parens++
-			emit(NodeLeftParen)
+			p.emit(NodeLeftParen)
 
 		case lexer.TokenRightParen:
 			parens--
-			emit(NodeRightParen)
+			p.emit(NodeRightParen)
 
-		case lexer.TokenSymbol: // and/or OR the string representing a property name
-			switch logicalOp := tokens[i].Symbol; logicalOp {
+		case lexer.TokenSymbol: // and/or OR the string representing a function/property name
+			switch logicalOp := t.Symbol; logicalOp {
 			case "and":
-				emit(NodeAnd)
+				p.emit(NodeAnd)
 
 			case "or":
-				emit(NodeOr)
+				p.emit(NodeOr)
 
-			default:
-				if i++; i >= len(tokens) { // Advance to the comparison operator
-					return emitError("Expected comparison operator")
+			default: // Property or function name
+				// if token after symbol is a left paren, this is a function name; else a proprty name
+				if p.acceptOne(lexer.TokenLeftParen) { // Function name
+					switch t.Symbol { // Do we recogize this function?
+					case "contains": // contains function
+						propName := p.next()
+						if !p.acceptOne(lexer.TokenComma) { // Is there a comma?
+							return p.emitError("Expected ',' after property name: %s", propName.Symbol)
+						}
+						literal := p.next()
+						if literal.TokenKind == lexer.TokenEOF {
+							return p.emitError("Expected literal after ','")
+						}
+						if !p.acceptOne(lexer.TokenRightParen) { // Is there a right paren?
+							return p.emitError("Expected ')' after literal: %s", literal.Symbol)
+						}
+						p.emit(NodeContains, Contains{propName.Symbol, literal})
+						continue
+
+					default: // Unrecognized function name
+						return p.emitError("Unrecognized function name: %s", t.Symbol)
+					}
 				}
-				op := tokens[i].Symbol
+
+				// Not a function; we assume a property name for a logical comparison operation
+				propName := t.Symbol // Not a function; this is a property name
+				op := p.next()
+				if op.TokenKind != lexer.TokenSymbol {
+					return p.emitError("Expected comparison operator after property name: %s", propName)
+				}
 				isCompareOp := func(s string) bool {
 					n := strings.Index("eqneleltgegt", s)
 					return (n >= 0) && ((n % 2) == 0)
 				}
-				if !isCompareOp(op) {
-					return emitError("Invalid comparison operator (%s)", op)
+				if !isCompareOp(op.Symbol) {
+					return p.emitError("Invalid comparison operator (%s)", op)
 				}
-				if i++; i >= len(tokens) { // Advance to the symbol
-					return emitError("Expected symbol after comparison operator")
+				literal := p.next()
+				if literal.TokenKind == lexer.TokenEOF {
+					return p.emitError("Expected literal after comparison operator: %s", op)
 				}
-				emit(NodeComparison, Comparison{
-					PropName: tokens[i-2].Symbol,
-					Op:       CompareOp(op),
-					Literal:  tokens[i]})
+				p.emit(NodeComparison, Comparison{
+					PropName: propName,
+					Op:       CompareOp(op.Symbol),
+					Literal:  literal})
 			}
 		}
 	}
-	panic("lexer didn't return EOF or Error") // We should never get here
+	//panic("lexer didn't return EOF or Error") // We should never get here
 }

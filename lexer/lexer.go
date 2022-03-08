@@ -7,6 +7,7 @@ import (
 )
 
 //var showToken = func(t Token) { fmt.Printf("%15s  \"%s\"\n", t.TokenKind, t.Symbol) }
+
 var showToken = func(t Token) {}
 
 // TokenKind represents a lexical token.
@@ -18,6 +19,7 @@ const (
 	TokenWhitespace = TokenKind("Whitespace")
 	TokenLeftParen  = TokenKind("(")
 	TokenRightParen = TokenKind(")")
+	TokenComma      = TokenKind("Comma")
 	TokenSymbol     = TokenKind("Symbol")
 	TokenNumber     = TokenKind("Number")
 )
@@ -26,6 +28,7 @@ const (
 type Token struct {
 	TokenKind        // The kind of token
 	Symbol    string // The value of the token
+	Error     error  // The error, if any
 }
 
 // lexer scans a string finding its tokens
@@ -66,6 +69,9 @@ func GetTokens(s string) []Token {
 
 		case r == ')':
 			l.emit(TokenRightParen)
+
+		case r == ',':
+			l.emit(TokenComma)
 
 		case strings.ContainsRune("+-"+digits, r): // Number/Float if starts with +, -, or a digit
 			l.acceptOne("+-")
